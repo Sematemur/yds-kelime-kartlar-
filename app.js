@@ -31,10 +31,21 @@ async function loadWords(){
 }
 async function loadState(){
   let s=await req(store("kv").get("state"));
-  if(!s){try{const r=localStorage.getItem("yds-kartlar-v1");if(r)s=JSON.parse(r)}catch(e){}}  // eski sürümden taşı
-  if(s)S=Object.assign(S,s);
+  // IndexedDB kaydı yoksa/bozulmuşsa tarayıcıdaki yedek kopyadan kurtar.
+  if(!s){try{const r=localStorage.getItem(KEY);if(r)s=JSON.parse(r)}catch(e){console.warn("Yerel yedek okunamadı:",e)}}
+  if(s)S=Object.assign({p:{},missed:[],seen:[],count:0},s);
 }
-const save=()=>{if(!db)return;try{store("kv","readwrite").put(S,"state")}catch(e){console.error(e)}};
+async function save(){
+  // IndexedDB ana kayıt; localStorage küçük bir acil durum kopyası.
+  try{
+    if(db){
+      const t=db.transaction("kv","readwrite");
+      t.objectStore("kv").put(S,"state");
+      await done(t);
+    }
+  }catch(e){console.error("IndexedDB kayıt hatası:",e)}
+  try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){console.warn("localStorage yedek kaydı yapılamadı:",e)}
+}
 
 const DAY=864e5,STEPS=[1,3,7,14],KEY="yds-kartlar-v1";
 const $=s=>document.querySelector(s),main=$("#main");
@@ -75,7 +86,7 @@ function renderCards(){
   const t0=TONE[w[1].toLowerCase()],tag=t0=="p"?"🟢":t0=="n"?"🔴":"";
   const tr=m.length>1?'<ol class="tr">'+m.map(x=>"<li>"+esc(x)+"</li>").join("")+"</ol>":'<p class="tr">'+esc(w[3])+"</p>";
   main.innerHTML='<div class="stage"><div class="card" id="card"><span class="stamp k">BİLİYORUM</span><span class="stamp d">BİLMİYORUM</span><div class="inner"><div class="face front"><span class="tag" title="Anlam tonu">'+tag+'</span><h2 class="en">'+esc(w[1])+'</h2><div class="ok">'+esc(w[2])+'</div><span class="hint">Çevirmek için dokun · sağa bil, sola bilme</span></div><div class="face back"><span class="tag">'+tag+'</span><h3 style="margin:0 0 8px;font-size:15px;color:var(--mute);font-weight:500">'+esc(w[1])+"</h3>"+tr+
-   (e&&e.syn.length?'<div class="row"><b>Eş anlamlı</b>'+esc(e.syn.join(", "))+"</div>":"")+(e&&e.ant.length?'<div class="row"><b>Zıt anlamlı</b>'+esc(e.ant.join(", "))+"</div>":"")+mark(w)+'</div></div></div></div><div class="actions"><button class="btn no" id="bn">✕ Bilmiyorum</button><button class="btn yes" id="by">✓ Biliyorum</button></div>';
+   (e&&e.syn.length?'<div class="row"><b>Eş anlamlı</b>'+esc(e.syn.join(", "))+"</div>":"")+(e&&e.ant.length?'<div class="row"><b>Zıt anlamlı</b>'+esc(e.ant.join(", "))+"</div>":"")+(e&&e.pos?'<div class="row"><b>Tür</b>'+esc(e.pos)+"</div>":"")+(e&&e.ex?'<div class="row"><b>Kitaptan örnek</b><br><i>'+esc(e.ex)+'</i></div>':'')+(e&&e.trans?'<div class="row"><b>Çeviri</b>'+esc(e.trans)+"</div>":"")+mark(w)+'</div></div></div></div><div class="actions"><button class="btn no" id="bn">✕ Bilmiyorum</button><button class="btn yes" id="by">✓ Biliyorum</button></div>';
   bind($("#card"));$("#bn").onclick=()=>answer(false);$("#by").onclick=()=>answer(true);
 }
 function bind(c){
