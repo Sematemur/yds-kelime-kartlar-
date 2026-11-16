@@ -173,24 +173,48 @@ function renderQuiz(){
 /* ---------- Yedekle / geri yükle ---------- */
 function renderBackup(msg){
   const last=S.lastBackup?new Date(S.lastBackup).toLocaleString("tr-TR",{dateStyle:"medium",timeStyle:"short"}):"hiç alınmadı";
-  main.innerHTML='<div class="item bk"><h3>Yedekle</h3><p>İlerlemen (bildiklerin, bilemediklerin, tekrar zamanları, kaldığın yer) tek bir dosyaya kaydedilir. Uygulamayı silersen ya da telefon değiştirirsen bu dosyayla devam edersin.</p><p style="color:var(--mute);font-size:13px">Son yedek: '+esc(last)+'</p><button class="btn" id="bkExp">⬇ Yedeği kaydet / paylaş</button><h3 style="margin-top:18px">Geri yükle</h3><p>Daha önce aldığın yedek dosyasını seç. Şu anki ilerlemenin üzerine yazılır.</p><button class="btn" id="bkImp">⬆ Yedek dosyası seç</button><input type="file" id="bkFile" accept=".json,application/json" hidden><div class="msg" id="bkMsg">'+(msg?esc(msg):"")+'</div></div>';
+  main.innerHTML='<div class="item bk"><h3>Yedekle</h3><p>İlerlemen (bildiklerin, bilemediklerin, tekrar zamanları, kaldığın yer) tek bir dosyaya kaydedilir. Uygulamayı silersen ya da telefon değiştirirsen bu dosyayla devam edersin.</p><p style="color:var(--mute);font-size:13px">Son yedek: '+esc(last)+'</p><button class="btn" id="bkExp">⬇ Yedeği kaydet / paylaş</button><button class="btn" id="bkCopy">📋 Yedeği metin olarak kopyala</button><h3 style="margin-top:18px">Geri yükle</h3><p>Daha önce aldığın yedek dosyasını seç. Şu anki ilerlemenin üzerine yazılır.</p><button class="btn" id="bkImp">⬆ Yedek dosyası seç</button><button class="btn" id="bkPaste">📋 Kopyalanan yedeği yapıştır</button><textarea id="bkText" placeholder="Yedek metnini buraya yapıştır, sonra Yükle\'ye bas" style="display:none;width:100%;min-height:120px;margin-bottom:10px;font:12px monospace;background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:8px"></textarea><input type="file" id="bkFile" accept=".json,application/json" hidden><div class="msg" id="bkMsg">'+(msg?esc(msg):"")+'</div></div>';
   $("#bkExp").onclick=exportBackup;
+  $("#bkCopy").onclick=copyBackup;
+  $("#bkPaste").onclick=()=>{const t=$("#bkText");if(t.style.display==="none"){t.style.display="block";t.focus();$("#bkPaste").textContent="⬆ Yapıştırdığım yedeği yükle"}else{const v=t.value.trim();if(v)importBackup(new Blob([v],{type:"application/json"}))}};
   $("#bkImp").onclick=()=>$("#bkFile").click();
   $("#bkFile").onchange=e=>{const f=e.target.files[0];if(f)importBackup(f);e.target.value=""};
 }
-async function exportBackup(){
+async function makeBackup(){
  const now=new Date();
  S.lastBackup=now.getTime();
  const saved=await save();
  const data={app:"yds-kartlar",version:2,deckVersion:SEED.ver,exported:now.toISOString(),words:W.map(w=>({id:w[0],en:w[1]})),state:S};
- const name="yds-yedek-"+now.toISOString().slice(0,10)+".json";
+ return{saved,json:JSON.stringify(data,null,2),name:"yds-yedek-"+now.toISOString().slice(0,10)+".json"};
+}
+async function copyBackup(){
  try{
-  const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json;charset=utf-8"});
-  const url=URL.createObjectURL(blob),a=document.createElement("a");
-  a.href=url;a.download=name;a.style.display="none";document.body.appendChild(a);a.click();a.remove();
+  const b=await makeBackup();
+  if(navigator.clipboard&&navigator.clipboard.writeText){await navigator.clipboard.writeText(b.json);renderBackup("Yedek panoya kopyalandı. Notlar, e-posta veya mesaj uygulamasına yapıştırıp sakla.")}
+  else{renderBackup("Bu tarayıcı panoya kopyalamayı desteklemiyor. “Yedeği kaydet / paylaş” butonunu dene.")}
+ }catch(e){console.error(e);renderBackup("Kopyalanamadı: "+(e.message||e))}
+}
+async function exportBackup(){
+ let b;
+ try{b=await makeBackup()}catch(e){console.error(e);renderBackup("Yedek hazırlanamadı: "+(e.message||e));return}
+ const file=new File([b.json],b.name,{type:"application/json"});
+ // 1) Paylaşma menüsü (iPhone/Android ana ekran uygulamasında en güvenilir yol)
+ try{
+  if(navigator.canShare&&navigator.canShare({files:[file]})){
+   await navigator.share({files:[file],title:"YDS yedek"});
+   renderBackup("Yedek paylaşıldı: "+b.name+" (Dosyalar'a kaydetmeyi seçtiysen tamam)");return;
+  }
+ }catch(e){
+  if(e&&e.name==="AbortError"){renderBackup("Paylaşma iptal edildi.");return}
+  console.warn("share başarısız, indirmeye geçiliyor:",e);
+ }
+ // 2) Klasik indirme (bilgisayar tarayıcıları)
+ try{
+  const url=URL.createObjectURL(file),a=document.createElement("a");
+  a.href=url;a.download=b.name;a.style.display="none";document.body.appendChild(a);a.click();a.remove();
   setTimeout(()=>URL.revokeObjectURL(url),10000);
-  renderBackup((saved?"Yedek indirildi: ":"Yedek indirildi; tarayıcı içi kayıtta sorun var: ")+name);
- }catch(e){console.error(e);renderBackup("Yedek alınamadı: "+(e.message||e))}
+  renderBackup("İndirme başlatıldı: "+b.name+". İndirilenler klasörüne bak. Bir şey inmediyse “Yedeği metin olarak kopyala” butonunu kullan.");
+ }catch(e){console.error(e);renderBackup("Yedek alınamadı: "+(e.message||e)+" — “Yedeği metin olarak kopyala”yı dene.")}
 }
 async function importBackup(f){
  try{
