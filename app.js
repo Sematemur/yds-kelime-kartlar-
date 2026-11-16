@@ -13,15 +13,48 @@ function openDB(){return new Promise((res,rej)=>{
   const r=indexedDB.open("yds-kartlar",1);
   r.onupgradeneeded=()=>{r.result.createObjectStore("words",{keyPath:"id"});r.result.createObjectStore("kv")};
   r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)})}
+const normWord=s=>String(s||"").trim().toLocaleLowerCase("en-US");
 async function seedWords(){
   const ver=await req(store("kv").get("seedVer"));
-  const n=await req(store("words").count());
-  if(ver===SEED.ver&&n===SEED.W.length)return;
-  const t=db.transaction(["words","kv"],"readwrite"),ws=t.objectStore("words");
-  for(const w of SEED.W){const k=w[1].toLowerCase();
-    ws.put({id:w[0],en:w[1],pron:w[2],tr:w[3],x:SEED.EX[k]||null,tone:SEED.TONE[k]||null})}
-  t.objectStore("kv").put(SEED.ver,"seedVer");
-  await done(t);
+  const oldRows=await req(store("words").getAll());
+  if(ver===SEED.ver&&oldRows.length===SEED.W.length)return;
+
+  let prior=await req(store("kv").get("state"));
+  if(!prior){try{const raw=localStorage.getItem("yds-kartlar-v1");if(raw)prior=JSON.parse(raw)}catch(e){console.warn("Eski ilerleme okunamadı:",e)}}
+
+  const oldById=new Map(oldRows.map(r=>[Number(r.id),normWord(r.en)]));
+  const newByWord=new Map(SEED.W.map(w=>[normWord(w[1]),w[0]]));
+  const mapId=raw=>{
+    const id=Number(raw);if(!Number.isInteger(id)||id<1)return null;
+    const oldWord=oldById.get(id);
+    if(oldWord&&newByWord.has(oldWord))return newByWord.get(oldWord);
+    if((ver===4||!oldRows.length)&&Array.isArray(SEED.IDMAP4)&&SEED.IDMAP4[id-1])return SEED.IDMAP4[id-1];
+    if(newByWord.size&&SEED.W[id-1]&&(!ver||ver===SEED.ver))return id;
+    return null;
+  };
+  let migrated=null;
+  if(prior&&prior.p&&typeof prior.p==="object"){
+    const p={};
+    for(const [oldId,value] of Object.entries(prior.p)){
+      const id=mapId(oldId);if(!id||!value||typeof value!=="object")continue;
+      const box=Math.max(0,Math.min(5,Number.isFinite(Number(value.box))?Math.floor(Number(value.box)):0));
+      const due=value.due===null?Infinity:(Number.isFinite(Number(value.due))?Number(value.due):Date.now());
+      const candidate={box,due};
+      if(!p[id]||candidate.box>p[id].box||(candidate.box===p[id].box&&candidate.due<p[id].due))p[id]=candidate;
+    }
+    const mapList=a=>[...new Set((Array.isArray(a)?a:[]).map(mapId).filter(Number.isInteger))];
+    migrated={p,missed:mapList(prior.missed),seen:mapList(prior.seen),count:Number.isFinite(Number(prior.count))?Math.max(0,Math.floor(Number(prior.count))):0};
+    if(prior.lastBackup)migrated.lastBackup=prior.lastBackup;
+  }
+
+  await new Promise((resolve,reject)=>{
+    const t=db.transaction(["words","kv"],"readwrite"),ws=t.objectStore("words"),kv=t.objectStore("kv");
+    ws.clear();
+    for(const w of SEED.W){const k=normWord(w[1]);ws.put({id:w[0],en:w[1],pron:w[2],tr:w[3],x:SEED.EX[k]||null,tone:SEED.TONE[k]||null})}
+    kv.put(SEED.ver,"seedVer");
+    if(migrated)kv.put(migrated,"state");
+    t.oncomplete=()=>resolve();t.onerror=()=>reject(t.error);t.onabort=()=>reject(t.error||new Error("Veri aktarımı iptal edildi"));
+  });
 }
 async function loadWords(){
   const rows=await req(store("words").getAll());rows.sort((a,b)=>a.id-b.id);
@@ -31,20 +64,14 @@ async function loadWords(){
 }
 async function loadState(){
   let s=await req(store("kv").get("state"));
-  // IndexedDB kaydı yoksa/bozulmuşsa tarayıcıdaki yedek kopyadan kurtar.
-  if(!s){try{const r=localStorage.getItem(KEY);if(r)s=JSON.parse(r)}catch(e){console.warn("Yerel yedek okunamadı:",e)}}
-  if(s)S=Object.assign({p:{},missed:[],seen:[],count:0},s);
+  if(!s){try{const r=localStorage.getItem("yds-kartlar-v1");if(r)s=JSON.parse(r)}catch(e){}}  // eski sürümden taşı
+  if(s)S=Object.assign(S,s);
 }
 async function save(){
-  // IndexedDB ana kayıt; localStorage küçük bir acil durum kopyası.
-  try{
-    if(db){
-      const t=db.transaction("kv","readwrite");
-      t.objectStore("kv").put(S,"state");
-      await done(t);
-    }
-  }catch(e){console.error("IndexedDB kayıt hatası:",e)}
-  try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){console.warn("localStorage yedek kaydı yapılamadı:",e)}
+ let ok=false;
+ try{if(db){const t=db.transaction("kv","readwrite");t.objectStore("kv").put(S,"state");await done(t);ok=true}}catch(e){console.error("IndexedDB kayıt:",e)}
+ try{localStorage.setItem(KEY,JSON.stringify(S));ok=true}catch(e){console.warn("localStorage yedek:",e)}
+ return ok;
 }
 
 const DAY=864e5,STEPS=[1,3,7,14],KEY="yds-kartlar-v1";
@@ -86,7 +113,7 @@ function renderCards(){
   const t0=TONE[w[1].toLowerCase()],tag=t0=="p"?"🟢":t0=="n"?"🔴":"";
   const tr=m.length>1?'<ol class="tr">'+m.map(x=>"<li>"+esc(x)+"</li>").join("")+"</ol>":'<p class="tr">'+esc(w[3])+"</p>";
   main.innerHTML='<div class="stage"><div class="card" id="card"><span class="stamp k">BİLİYORUM</span><span class="stamp d">BİLMİYORUM</span><div class="inner"><div class="face front"><span class="tag" title="Anlam tonu">'+tag+'</span><h2 class="en">'+esc(w[1])+'</h2><div class="ok">'+esc(w[2])+'</div><span class="hint">Çevirmek için dokun · sağa bil, sola bilme</span></div><div class="face back"><span class="tag">'+tag+'</span><h3 style="margin:0 0 8px;font-size:15px;color:var(--mute);font-weight:500">'+esc(w[1])+"</h3>"+tr+
-   (e&&e.syn.length?'<div class="row"><b>Eş anlamlı</b>'+esc(e.syn.join(", "))+"</div>":"")+(e&&e.ant.length?'<div class="row"><b>Zıt anlamlı</b>'+esc(e.ant.join(", "))+"</div>":"")+(e&&e.pos?'<div class="row"><b>Tür</b>'+esc(e.pos)+"</div>":"")+(e&&e.ex?'<div class="row"><b>Kitaptan örnek</b><br><i>'+esc(e.ex)+'</i></div>':'')+(e&&e.trans?'<div class="row"><b>Çeviri</b>'+esc(e.trans)+"</div>":"")+mark(w)+'</div></div></div></div><div class="actions"><button class="btn no" id="bn">✕ Bilmiyorum</button><button class="btn yes" id="by">✓ Biliyorum</button></div>';
+   (e&&e.syn.length?'<div class="row"><b>Eş anlamlı</b>'+esc(e.syn.join(", "))+"</div>":"")+(e&&e.ant.length?'<div class="row"><b>Zıt anlamlı</b>'+esc(e.ant.join(", "))+"</div>":"")+(e&&e.example?'<div class="row"><b>Kitaptan örnek</b><div><i>'+esc(e.example)+'</i>'+(e.translation?'<br><span>'+esc(e.translation)+'</span>':'')+'</div></div>':"")+mark(w)+'</div></div></div></div><div class="actions"><button class="btn no" id="bn">✕ Bilmiyorum</button><button class="btn yes" id="by">✓ Biliyorum</button></div>';
   bind($("#card"));$("#bn").onclick=()=>answer(false);$("#by").onclick=()=>answer(true);
 }
 function bind(c){
@@ -152,27 +179,51 @@ function renderBackup(msg){
   $("#bkFile").onchange=e=>{const f=e.target.files[0];if(f)importBackup(f);e.target.value=""};
 }
 async function exportBackup(){
-  const now=new Date();
-  const data={app:"yds-kartlar",version:1,exported:now.toISOString(),state:S};
-  const name="yds-yedek-"+now.toISOString().slice(0,10)+".json";
-  const file=new File([JSON.stringify(data)],name,{type:"application/json"});
-  try{
-    if(navigator.canShare&&navigator.canShare({files:[file]})){await navigator.share({files:[file],title:"YDS Kartlar yedeği"})}
-    else{const u=URL.createObjectURL(file),a=document.createElement("a");a.href=u;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),2000)}
-  }catch(e){if(e&&e.name==="AbortError")return;console.error(e);renderBackup("Yedek alınamadı.");return}
-  S.lastBackup=Date.now();save();renderBackup("Yedek hazır: "+name);
+ const now=new Date();
+ S.lastBackup=now.getTime();
+ const saved=await save();
+ const data={app:"yds-kartlar",version:2,deckVersion:SEED.ver,exported:now.toISOString(),words:W.map(w=>({id:w[0],en:w[1]})),state:S};
+ const name="yds-yedek-"+now.toISOString().slice(0,10)+".json";
+ try{
+  const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json;charset=utf-8"});
+  const url=URL.createObjectURL(blob),a=document.createElement("a");
+  a.href=url;a.download=name;a.style.display="none";document.body.appendChild(a);a.click();a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),10000);
+  renderBackup((saved?"Yedek indirildi: ":"Yedek indirildi; tarayıcı içi kayıtta sorun var: ")+name);
+ }catch(e){console.error(e);renderBackup("Yedek alınamadı: "+(e.message||e))}
 }
 async function importBackup(f){
-  try{
-    const o=JSON.parse(await f.text());
-    if(!o||o.app!=="yds-kartlar"||!o.state||typeof o.state.p!=="object")throw new Error("bad");
-    const n=Object.keys(o.state.p).length;
-    if(!confirm("Yedekteki ilerleme ("+n+" kelime görülmüş) yüklensin mi? Şu anki ilerlemenin üzerine yazılır."))return;
-    const s=Object.assign({p:{},missed:[],seen:[],count:0},o.state);
-    for(const id in s.p){if(s.p[id].due===null)s.p[id].due=Infinity}   // JSON'da Infinity null olur
-    S=s;save();undoStack=[];quiz=null;cur=null;
-    renderBackup("Yüklendi: "+n+" kelimelik ilerleme geri geldi. Kartlar sekmesine dön.");stats();
-  }catch(e){console.error(e);renderBackup("Bu dosya geçerli bir YDS yedeği değil.")}
+ try{
+  const o=JSON.parse(await f.text());
+  if(!o||o.app!=="yds-kartlar"||!o.state||!o.state.p||typeof o.state.p!=="object"||Array.isArray(o.state.p))throw new Error("bad");
+  const byWord=new Map(W.map(w=>[normWord(w[1]),w[0]]));
+  const fileIds=new Map();
+  if(Array.isArray(o.words))for(const w of o.words){if(w&&Number.isInteger(Number(w.id))&&w.en){const id=byWord.get(normWord(w.en));if(id)fileIds.set(Number(w.id),id)}}
+  const mapSavedId=raw=>{
+    const id=Number(raw);if(!Number.isInteger(id)||id<1)return null;
+    if(fileIds.has(id))return fileIds.get(id);
+    if(Number(o.deckVersion)===4||o.deckVersion===undefined){const mapped=SEED.IDMAP4&&SEED.IDMAP4[id-1];if(mapped)return mapped}
+    if(Number(o.deckVersion)===SEED.ver&&byId(id))return id;
+    return null;
+  };
+  const p={};
+  for(const [oldId,value] of Object.entries(o.state.p)){
+    const id=mapSavedId(oldId);if(!id||!value||typeof value!=="object")continue;
+    const box=Math.max(0,Math.min(5,Number.isFinite(Number(value.box))?Math.floor(Number(value.box)):0));
+    const due=value.due===null?Infinity:(Number.isFinite(Number(value.due))?Number(value.due):Date.now());
+    const candidate={box,due};
+    if(!p[id]||candidate.box>p[id].box||(candidate.box===p[id].box&&candidate.due<p[id].due))p[id]=candidate;
+  }
+  const mapList=a=>[...new Set((Array.isArray(a)?a:[]).map(mapSavedId).filter(Number.isInteger))];
+  const next={p,missed:mapList(o.state.missed),seen:mapList(o.state.seen),count:Number.isFinite(Number(o.state.count))?Math.max(0,Math.floor(Number(o.state.count))):0};
+  if(o.state.lastBackup)next.lastBackup=o.state.lastBackup;
+  if(!confirm("Yedekteki ilerleme ("+Object.keys(p).length+" kelime görülmüş) yüklensin mi? Şu anki ilerlemenin üzerine yazılır."))return;
+  S=next;
+  const saved=await save();
+  if(!saved)throw new Error("Kayıt yapılamadı");
+  undoStack=[];quiz=null;cur=null;tab=3;
+  renderBackup("Yedeklendi: "+Object.keys(p).length+" kelimenin ilerlemesi geri yüklendi. Kartlar sekmesine dönebilirsin.");stats();
+ }catch(e){console.error(e);renderBackup("Bu dosya geçerli bir YDS yedeği değil veya geri yüklenemedi.")}
 }
 
 async function boot(){
