@@ -143,10 +143,35 @@ $("#undo").onclick=()=>{const u=undoStack.pop();if(!u)return;
   if(u.prev)S.p[u.id]=u.prev;else delete S.p[u.id];
   S.missed=u.missed;S.seen=u.seen;S.count=u.count;save();quiz=null;tab=1;cur=byId(u.id);render()};
 $("#t1").onclick=()=>{tab=1;render()};$("#t2").onclick=()=>{tab=2;render()};$("#t3").onclick=()=>{tab=3;render()};
+/* ---------- Bilemediklerim listesini indir / kopyala ---------- */
+function missedText(){
+  const d=new Date().toLocaleDateString("tr-TR");
+  const lines=S.missed.map(byId).filter(Boolean).map((w,i)=>(i+1)+". "+w[1]+" — "+w[3]);
+  return "YDS Bilemediklerim ("+d+") — "+lines.length+" kelime\n\n"+lines.join("\n")+"\n";
+}
+async function exportMissed(){
+  const msg=$("#mMsg"),text=missedText(),name="yds-bilemediklerim-"+new Date().toISOString().slice(0,10)+".txt";
+  const file=new File(["\ufeff"+text],name,{type:"text/plain;charset=utf-8"});
+  try{
+    if(navigator.canShare&&navigator.canShare({files:[file]})){await navigator.share({files:[file],title:"YDS bilemediklerim"});msg.textContent="Liste paylaşıldı: "+name;return}
+  }catch(e){if(e&&e.name==="AbortError"){msg.textContent="Paylaşma iptal edildi.";return}console.warn("share başarısız:",e)}
+  try{
+    const url=URL.createObjectURL(file),a=document.createElement("a");
+    a.href=url;a.download=name;a.style.display="none";document.body.appendChild(a);a.click();a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),10000);
+    msg.textContent="İndirme başlatıldı: "+name+". Bir şey inmediyse “Kopyala” butonunu kullan.";
+  }catch(e){console.error(e);msg.textContent="İndirilemedi: "+(e.message||e)+" — “Kopyala”yı dene."}
+}
+async function copyMissed(){
+  const msg=$("#mMsg");
+  try{await navigator.clipboard.writeText(missedText());msg.textContent="Liste panoya kopyalandı."}
+  catch(e){console.error(e);msg.textContent="Kopyalanamadı."}
+}
 function renderMissed(){
   const list=S.missed.map(byId);
   if(!list.length){main.innerHTML='<div class="empty">Henüz bilemediğin kelime yok.<br>Sola kaydırdığın veya testte yanlış yaptığın kelimeler burada toplanır.</div>';return}
-  main.innerHTML=list.map(w=>{const e=ex(w);return '<div class="item"><h3>'+esc(w[1])+' <span style="font-weight:400;color:var(--mute);font-size:14px">'+esc(w[2])+'</span></h3><p>'+esc(w[3])+"</p>"+(e?mark(w):"")+'<button class="btn" data-id="'+w[0]+'" style="margin-top:8px;min-height:36px;padding:6px 12px">Öğrendim, listeden çıkar</button></div>'}).join("");
+  main.innerHTML='<div style="display:flex;gap:8px;margin-bottom:8px"><button class="btn" id="mExp" style="flex:1">⬇ Listeyi indir</button><button class="btn" id="mCopy" style="flex:1">📋 Kopyala</button></div><div class="msg" id="mMsg" style="color:var(--ok);font-size:14px;min-height:20px;margin-bottom:8px"></div>'+list.map(w=>{const e=ex(w);return '<div class="item"><h3>'+esc(w[1])+' <span style="font-weight:400;color:var(--mute);font-size:14px">'+esc(w[2])+'</span></h3><p>'+esc(w[3])+"</p>"+(e?mark(w):"")+'<button class="btn" data-id="'+w[0]+'" style="margin-top:8px;min-height:36px;padding:6px 12px">Öğrendim, listeden çıkar</button></div>'}).join("");
+  $("#mExp").onclick=exportMissed;$("#mCopy").onclick=copyMissed;
   main.querySelectorAll("button[data-id]").forEach(b=>b.onclick=()=>{S.missed=S.missed.filter(i=>i!=b.dataset.id);save();render()});
 }
 function shuffle(a){a=a.slice();for(let i=a.length-1;i>0;i--){const j=Math.random()*(i+1)|0;[a[i],a[j]]=[a[j],a[i]]}return a}
