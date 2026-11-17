@@ -77,7 +77,7 @@ async function save(){
 const DAY=864e5,STEPS=[1,3,7,14],KEY="yds-kartlar-v1";
 const $=s=>document.querySelector(s),main=$("#main");
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-const byId=id=>W[id-1];
+const byId=id=>W.find(w=>w[0]===id)||W[id-1];
 const meanings=t=>t.split(/\s*\d\)\s*/).map(x=>x.trim()).filter(Boolean);
 const short=t=>meanings(t)[0].split(",").slice(0,2).join(",").trim();
 const ex=w=>EX[w[1].toLowerCase()];
