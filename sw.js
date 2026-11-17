@@ -1,6 +1,6 @@
 /* Service worker: uygulamayı çevrimdışı çalıştırır.
    Dosyaları değiştirirsen VERSION'ı artır ki telefonlar yeni sürümü alsın. */
-const VERSION = "v9";
+const VERSION = "v10";
 const CACHE = "yds-kartlar-" + VERSION;
 const SHELL = ["./", "index.html", "app.js", "data.js", "manifest.webmanifest",
   "icons/icon-192.png", "icons/icon-512.png", "icons/icon-maskable-512.png", "icons/apple-touch-icon.png"];
